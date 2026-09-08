@@ -6,16 +6,19 @@ import {
   MicOff,
   ShieldCheck,
   GraduationCap,
-  Users,
   Sparkles,
   ArrowRight,
   Monitor,
-  Loader2
+  Loader2,
+  KeyRound,
+  Calendar,
+  AlertCircle
 } from 'lucide-react';
 import { UserRole } from '../types';
 
 interface LobbyProps {
   initialRoomId?: string;
+  initialPasscode?: string;
   onJoin: (config: {
     roomId: string;
     roomTitle: string;
@@ -25,13 +28,20 @@ interface LobbyProps {
     isVideoMuted: boolean;
     localStream: MediaStream | null;
   }) => void;
+  onOpenAdminPanel?: () => void;
 }
 
-export const Lobby: React.FC<LobbyProps> = ({ initialRoomId = '', onJoin }) => {
+export const Lobby: React.FC<LobbyProps> = ({
+  initialRoomId = '',
+  initialPasscode = '',
+  onJoin,
+  onOpenAdminPanel
+}) => {
   const [activeTab, setActiveTab] = useState<'create' | 'join'>(initialRoomId ? 'join' : 'create');
   const [name, setName] = useState('');
   const [roomTitle, setRoomTitle] = useState('');
   const [roomId, setRoomId] = useState(initialRoomId);
+  const [studentPasscode, setStudentPasscode] = useState(initialPasscode);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [roomError, setRoomError] = useState<string | null>(null);
 
@@ -140,7 +150,7 @@ export const Lobby: React.FC<LobbyProps> = ({ initialRoomId = '', onJoin }) => {
     setIsVideoMuted((prev) => !prev);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
 
@@ -173,9 +183,34 @@ export const Lobby: React.FC<LobbyProps> = ({ initialRoomId = '', onJoin }) => {
       setIsSubmitting(true);
       setRoomError(null);
 
+      let resolvedTitle = `Clase Virtual (${targetRoom})`;
+
+      // Verify passcode if room is a scheduled class
+      try {
+        const verifyRes = await fetch(`/api/scheduled-classes/${encodeURIComponent(targetRoom)}/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ passcode: studentPasscode.trim() })
+        });
+
+        if (verifyRes.status === 401) {
+          const errData = await verifyRes.json();
+          setRoomError(errData.error || 'Código de inicio de sesión de estudiante incorrecto.');
+          setIsSubmitting(false);
+          return;
+        } else if (verifyRes.ok) {
+          const okData = await verifyRes.json();
+          if (okData.class?.title) {
+            resolvedTitle = okData.class.title;
+          }
+        }
+      } catch (err) {
+        console.warn('Verification request error:', err);
+      }
+
       onJoin({
         roomId: targetRoom,
-        roomTitle: `Clase Virtual (${targetRoom})`,
+        roomTitle: resolvedTitle,
         name: finalName,
         role: 'student',
         isAudioMuted,
@@ -305,6 +340,33 @@ export const Lobby: React.FC<LobbyProps> = ({ initialRoomId = '', onJoin }) => {
         {/* Right Side: Form (Create or Join) */}
         <div className="w-full md:w-1/2 p-6 sm:p-8 flex flex-col justify-between bg-slate-900">
           <div>
+            {/* Admin Panel Quick Access Banner */}
+            {onOpenAdminPanel && (
+              <div className="mb-4 flex items-center justify-between p-2.5 bg-blue-950/40 border border-blue-500/30 rounded-2xl">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-lg bg-blue-600/30 flex items-center justify-center text-blue-400">
+                    <Calendar className="w-3.5 h-3.5" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-slate-200 leading-tight">
+                      Panel de Administración
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      Programa por fecha/hora y comparte por WhatsApp
+                    </p>
+                  </div>
+                </div>
+                <button
+                  id="btn-goto-admin-panel"
+                  type="button"
+                  onClick={onOpenAdminPanel}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold shadow-sm transition cursor-pointer"
+                >
+                  Abrir Panel
+                </button>
+              </div>
+            )}
+
             {/* Tab Navigation */}
             <div
               id="lobby-tabs"
@@ -372,30 +434,53 @@ export const Lobby: React.FC<LobbyProps> = ({ initialRoomId = '', onJoin }) => {
                   </p>
                 </div>
               ) : (
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                    Código o ID de la Sala
-                  </label>
-                  <input
-                    id="input-room-id"
-                    type="text"
-                    value={roomId}
-                    onChange={(e) => {
-                      setRoomId(e.target.value.toUpperCase());
-                      setRoomError(null);
-                    }}
-                    placeholder="Ej. SALA-9B2F"
-                    className={`w-full px-4 py-3 bg-slate-950 border rounded-xl text-slate-100 placeholder-slate-500 text-sm font-mono tracking-wide focus:outline-none transition ${
-                      roomError ? 'border-red-500 focus:border-red-500' : 'border-slate-800 focus:border-blue-500'
-                    }`}
-                  />
-                  {roomError ? (
-                    <p className="text-[11px] text-red-400 mt-1.5 font-medium">{roomError}</p>
-                  ) : (
-                    <p className="text-[11px] text-slate-400 mt-1.5">
-                      Pega el código de sala proporcionado por tu profesor o anfitrión.
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
+                      Código o ID de la Sala
+                    </label>
+                    <input
+                      id="input-room-id"
+                      type="text"
+                      value={roomId}
+                      onChange={(e) => {
+                        setRoomId(e.target.value.toUpperCase());
+                        setRoomError(null);
+                      }}
+                      placeholder="Ej. SALA-9B2F"
+                      className={`w-full px-4 py-3 bg-slate-950 border rounded-xl text-slate-100 placeholder-slate-500 text-sm font-mono tracking-wide focus:outline-none transition ${
+                        roomError ? 'border-red-500 focus:border-red-500' : 'border-slate-800 focus:border-blue-500'
+                      }`}
+                    />
+                    {roomError ? (
+                      <p className="text-[11px] text-red-400 mt-1.5 font-medium">{roomError}</p>
+                    ) : (
+                      <p className="text-[11px] text-slate-400 mt-1.5">
+                        Pega el código de sala proporcionado por tu profesor o anfitrión.
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                      <KeyRound className="w-3.5 h-3.5 text-blue-400" />
+                      <span>Código de Inicio de Sesión</span>
+                    </label>
+                    <input
+                      id="input-student-passcode"
+                      type="text"
+                      value={studentPasscode}
+                      onChange={(e) => {
+                        setStudentPasscode(e.target.value);
+                        setRoomError(null);
+                      }}
+                      placeholder="Ej. 749210 (opcional según la clase)"
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-500 text-sm font-mono tracking-wider focus:outline-none focus:border-blue-500 transition"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Si la clase fue programada por el profesor, ingresa el código enviado en WhatsApp.
                     </p>
-                  )}
+                  </div>
                 </div>
               )}
 

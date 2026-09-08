@@ -45,9 +45,162 @@ interface RoomRecord {
 
 const rooms = new Map<string, RoomRecord>();
 
+// Scheduled & Concurrent Classes store
+interface ScheduledClassRecord {
+  id: string; // Room ID
+  title: string;
+  subject?: string;
+  scheduledDate: string; // "YYYY-MM-DD"
+  scheduledTime: string; // "HH:MM"
+  durationMinutes: number;
+  passcode: string; // Student session start code
+  description?: string;
+  instructorName: string;
+  createdAt: number;
+  status: 'scheduled' | 'live' | 'completed';
+}
+
+const scheduledClasses = new Map<string, ScheduledClassRecord>();
+
+// Seed with concurrent classes
+const todayStr = new Date().toISOString().split('T')[0];
+scheduledClasses.set('MAT-4820', {
+  id: 'MAT-4820',
+  title: 'Cálculo Vectorial y Geometría Analítica',
+  subject: 'Matemáticas',
+  scheduledDate: todayStr,
+  scheduledTime: '15:00',
+  durationMinutes: 90,
+  passcode: '839201',
+  description: 'Unidad 3: Integrales múltiples, teoremas de Green y Stokes.',
+  instructorName: 'Prof. Carlos Mendoza',
+  createdAt: Date.now() - 3600000,
+  status: 'scheduled'
+});
+
+scheduledClasses.set('FIS-1044', {
+  id: 'FIS-1044',
+  title: 'Física Clásica: Cinemática y Dinámica (Grupo Concurrente B)',
+  subject: 'Física',
+  scheduledDate: todayStr,
+  scheduledTime: '15:30',
+  durationMinutes: 60,
+  passcode: '419528',
+  description: 'Resolución de problemas de leyes de Newton y conservación de la energía.',
+  instructorName: 'Dra. Elena Ruiz',
+  createdAt: Date.now() - 1800000,
+  status: 'scheduled'
+});
+
+scheduledClasses.set('PROG-9231', {
+  id: 'PROG-9231',
+  title: 'Estructuras de Datos y Algoritmos en Tiempo Real',
+  subject: 'Informática',
+  scheduledDate: todayStr,
+  scheduledTime: '17:00',
+  durationMinutes: 120,
+  passcode: '620184',
+  description: 'Árboles balanceados, grafos y análisis de complejidad temporal.',
+  instructorName: 'Ing. Roberto Silva',
+  createdAt: Date.now() - 600000,
+  status: 'scheduled'
+});
+
 // REST API routes
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', activeRooms: rooms.size, timestamp: Date.now() });
+});
+
+// List scheduled classes with real-time live & concurrency status
+app.get('/api/scheduled-classes', (req, res) => {
+  const list = Array.from(scheduledClasses.values()).map((item) => {
+    const room = rooms.get(item.id);
+    const activeCount = room ? room.participants.size : 0;
+    return {
+      ...item,
+      activeParticipantsCount: activeCount,
+      status: activeCount > 0 ? 'live' : item.status
+    };
+  });
+  res.json(list);
+});
+
+// Create new scheduled class with custom/auto code and passcode
+app.post('/api/scheduled-classes', (req, res) => {
+  const {
+    title,
+    subject,
+    scheduledDate,
+    scheduledTime,
+    durationMinutes,
+    passcode,
+    description,
+    instructorName
+  } = req.body;
+
+  if (!title || !title.trim()) {
+    return res.status(400).json({ error: 'El título de la clase es obligatorio' });
+  }
+
+  const cleanSubject = subject?.trim() || 'CLASE';
+  const prefix = cleanSubject.replace(/[^a-zA-Z]/g, '').substring(0, 4).toUpperCase() || 'SALA';
+  const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+  const id = `${prefix}-${randomSuffix}`;
+
+  const cleanPasscode = (passcode && passcode.trim()) ? passcode.trim() : Math.floor(100000 + Math.random() * 900000).toString();
+  const today = new Date().toISOString().split('T')[0];
+  const currentTime = new Date().toTimeString().substring(0, 5);
+
+  const newClass: ScheduledClassRecord = {
+    id,
+    title: title.trim(),
+    subject: cleanSubject,
+    scheduledDate: scheduledDate || today,
+    scheduledTime: scheduledTime || currentTime,
+    durationMinutes: Number(durationMinutes) || 60,
+    passcode: cleanPasscode,
+    description: description?.trim() || '',
+    instructorName: instructorName?.trim() || 'Profesor Administrador',
+    createdAt: Date.now(),
+    status: 'scheduled'
+  };
+
+  scheduledClasses.set(id, newClass);
+  res.json(newClass);
+});
+
+// Delete scheduled class
+app.delete('/api/scheduled-classes/:id', (req, res) => {
+  const id = req.params.id.toUpperCase();
+  if (scheduledClasses.has(id)) {
+    scheduledClasses.delete(id);
+    return res.json({ success: true, id });
+  }
+  res.status(404).json({ error: 'Clase no encontrada' });
+});
+
+// Verify passcode for student join
+app.post('/api/scheduled-classes/:id/verify', (req, res) => {
+  const id = req.params.id.toUpperCase();
+  const { passcode } = req.body;
+  const scheduled = scheduledClasses.get(id);
+
+  if (!scheduled) {
+    return res.json({ valid: true, requiresPasscode: false });
+  }
+
+  if (!scheduled.passcode) {
+    return res.json({ valid: true, requiresPasscode: false, title: scheduled.title });
+  }
+
+  if (scheduled.passcode.toUpperCase() === (passcode || '').toString().trim().toUpperCase()) {
+    return res.json({ valid: true, title: scheduled.title });
+  }
+
+  return res.status(401).json({
+    valid: false,
+    error: 'Código de inicio de sesión incorrecto. Verifica el código proporcionado por tu profesor.'
+  });
 });
 
 app.post('/api/rooms', (req, res) => {
@@ -104,10 +257,13 @@ io.on('connection', (socket) => {
     currentRoomId = normalizedRoomId;
 
     let room = rooms.get(normalizedRoomId);
+    const scheduledInfo = scheduledClasses.get(normalizedRoomId);
+
     if (!room) {
+      const defaultTitle = scheduledInfo?.title || title?.trim() || (role === 'admin' ? `Clase de ${name || 'Profesor'}` : `Clase Virtual (${normalizedRoomId})`);
       room = {
         id: normalizedRoomId,
-        title: title?.trim() || (role === 'admin' ? `Clase de ${name || 'Profesor'}` : `Clase Virtual (${normalizedRoomId})`),
+        title: defaultTitle,
         adminSocketId: role === 'admin' ? socket.id : '',
         createdAt: Date.now(),
         isRecording: false,
@@ -117,6 +273,12 @@ io.on('connection', (socket) => {
       rooms.set(normalizedRoomId, room);
     } else if (title?.trim() && role === 'admin') {
       room.title = title.trim();
+    } else if (scheduledInfo?.title && !room.title) {
+      room.title = scheduledInfo.title;
+    }
+
+    if (scheduledInfo) {
+      scheduledInfo.status = 'live';
     }
 
     if (role === 'admin' && !room.adminSocketId) {
@@ -256,6 +418,86 @@ io.on('connection', (socket) => {
     };
     room.messages.push(statusMsg);
     io.to(currentRoomId).emit('new-chat-message', statusMsg);
+  });
+
+  // Admin controlling student media (microphone or camera)
+  socket.on('admin-control-media', ({ targetSocketId, mediaType, action }: {
+    targetSocketId: string;
+    mediaType: 'audio' | 'video';
+    action: 'mute' | 'unmute' | 'turn-off' | 'request-on';
+  }) => {
+    if (!currentRoomId || !currentUser) return;
+    const room = rooms.get(currentRoomId);
+    if (!room) return;
+
+    if (currentUser.role !== 'admin' && room.adminSocketId !== socket.id) {
+      return;
+    }
+
+    const targetUser = room.participants.get(targetSocketId);
+    if (targetUser) {
+      if (action === 'mute' && mediaType === 'audio') {
+        targetUser.isMuted = true;
+      } else if (action === 'turn-off' && mediaType === 'video') {
+        targetUser.isVideoOff = true;
+      }
+      room.participants.set(targetSocketId, targetUser);
+
+      // Notify the target user directly
+      io.to(targetSocketId).emit('admin-media-command', {
+        mediaType,
+        action,
+        adminName: currentUser.name
+      });
+
+      // Broadcast media state update to everyone in room
+      io.to(currentRoomId).emit('user-media-toggled', {
+        userId: targetSocketId,
+        type: mediaType,
+        enabled: action === 'unmute' || action === 'request-on'
+      });
+    }
+  });
+
+  // Admin mute all students
+  socket.on('admin-mute-all', () => {
+    if (!currentRoomId || !currentUser) return;
+    const room = rooms.get(currentRoomId);
+    if (!room) return;
+
+    if (currentUser.role !== 'admin' && room.adminSocketId !== socket.id) {
+      return;
+    }
+
+    // Mute all students
+    room.participants.forEach((participant, id) => {
+      if (participant.role !== 'admin' && id !== socket.id) {
+        participant.isMuted = true;
+        io.to(id).emit('admin-media-command', {
+          mediaType: 'audio',
+          action: 'mute',
+          adminName: currentUser.name
+        });
+        io.to(currentRoomId).emit('user-media-toggled', {
+          userId: id,
+          type: 'audio',
+          enabled: false
+        });
+      }
+    });
+
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const muteMsg: StoredMessage = {
+      id: `sys-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      senderId: 'system',
+      senderName: 'Sistema',
+      text: `🔇 El administrador (${currentUser.name}) ha silenciado los micrófonos de todos los estudiantes.`,
+      timestamp: timeStr,
+      isSystem: true
+    };
+    room.messages.push(muteMsg);
+    io.to(currentRoomId).emit('new-chat-message', muteMsg);
   });
 
   // Admin ending the room for all

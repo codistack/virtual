@@ -13,11 +13,19 @@ interface VideoGridProps {
     stream: MediaStream | null;
   };
   remoteParticipants: Participant[];
+  currentUserRole?: UserRole;
+  onAdminControlMedia?: (
+    targetSocketId: string,
+    mediaType: 'audio' | 'video',
+    action: 'mute' | 'unmute' | 'turn-off' | 'request-on'
+  ) => void;
 }
 
 export const VideoGrid: React.FC<VideoGridProps> = ({
   localUser,
-  remoteParticipants
+  remoteParticipants,
+  currentUserRole,
+  onAdminControlMedia
 }) => {
   const [pinnedId, setPinnedId] = useState<string | null>(null);
 
@@ -99,6 +107,8 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
               isScreenSharing={stageParticipant.isScreenSharing}
               isPinned={true}
               onTogglePin={() => handleTogglePin(stageParticipant.id)}
+              currentUserRole={currentUserRole}
+              onAdminControlMedia={onAdminControlMedia}
             />
           </div>
 
@@ -121,6 +131,8 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
                     isScreenSharing={p.isScreenSharing}
                     isPinned={false}
                     onTogglePin={() => handleTogglePin(p.id)}
+                    currentUserRole={currentUserRole}
+                    onAdminControlMedia={onAdminControlMedia}
                   />
                 </div>
               ))}
@@ -145,6 +157,8 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
                 isScreenSharing={p.isScreenSharing}
                 isPinned={false}
                 onTogglePin={() => handleTogglePin(p.id)}
+                currentUserRole={currentUserRole}
+                onAdminControlMedia={onAdminControlMedia}
               />
             </div>
           ))}

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Copy, Check, ShieldCheck, Users, Radio, Sparkles } from 'lucide-react';
+import { Copy, Check, ShieldCheck, Users, Radio, Sparkles, MessageCircle } from 'lucide-react';
 import { UserRole } from '../types';
 import { formatDuration } from '../utils/recorder';
 
@@ -12,6 +12,8 @@ interface HeaderBarProps {
   meetingRecordingSeconds: number;
   isLocalRecording: boolean;
   localRecordingSeconds: number;
+  onToggleParticipants?: () => void;
+  isParticipantsOpen?: boolean;
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
@@ -22,7 +24,9 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   isMeetingRecording,
   meetingRecordingSeconds,
   isLocalRecording,
-  localRecordingSeconds
+  localRecordingSeconds,
+  onToggleParticipants,
+  isParticipantsOpen = false
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -36,6 +40,16 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
       // Fallback
       prompt('Copia el enlace de la sala:', fullUrl);
     }
+  };
+
+  const handleShareWhatsApp = () => {
+    const fullUrl = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
+    const msg =
+      `📚 *Enlace para unirse a la clase virtual*\n\n` +
+      `📌 *Clase:* ${roomTitle}\n` +
+      `🆔 *ID de Sala:* *${roomId}*\n\n` +
+      `🔗 *Entra ahora:* \n${fullUrl}`;
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, '_blank');
   };
 
   return (
@@ -104,8 +118,19 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
         )}
       </div>
 
-      {/* Right: Role indicator & Participant Counter */}
+      {/* Right: WhatsApp Share, Role indicator & Participant Counter / Drawer Toggle */}
       <div className="flex items-center gap-2 sm:gap-3">
+        {/* WhatsApp Share Button */}
+        <button
+          id="btn-header-share-whatsapp"
+          onClick={handleShareWhatsApp}
+          className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#25D366] hover:bg-[#20ba5a] text-slate-950 font-bold text-xs shadow-sm transition cursor-pointer"
+          title="Compartir enlace de la clase por WhatsApp"
+        >
+          <MessageCircle className="w-3.5 h-3.5 fill-slate-950" />
+          <span>WhatsApp</span>
+        </button>
+
         {/* Role badge */}
         <div
           id="badge-user-role"
@@ -125,15 +150,31 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           )}
         </div>
 
-        {/* Participants count */}
-        <div
-          id="badge-participant-count"
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800/90 border border-slate-700/80 text-slate-200 text-xs font-medium"
-          title="Participantes en la sala"
-        >
-          <Users className="w-3.5 h-3.5 text-slate-400" />
-          <span>{participantCount}</span>
-        </div>
+        {/* Participants count button (Toggles drawer) */}
+        {onToggleParticipants ? (
+          <button
+            id="badge-participant-count"
+            onClick={onToggleParticipants}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition cursor-pointer ${
+              isParticipantsOpen
+                ? 'bg-blue-600 border-blue-500 text-white shadow-md'
+                : 'bg-slate-800/90 hover:bg-slate-800 border-slate-700/80 text-slate-200'
+            }`}
+            title="Ver y gestionar participantes"
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>Participantes ({participantCount})</span>
+          </button>
+        ) : (
+          <div
+            id="badge-participant-count"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800/90 border border-slate-700/80 text-slate-200 text-xs font-medium"
+            title="Participantes en la sala"
+          >
+            <Users className="w-3.5 h-3.5 text-slate-400" />
+            <span>{participantCount}</span>
+          </div>
+        )}
       </div>
     </header>
   );

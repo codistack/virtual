@@ -8,10 +8,17 @@ import { ChatDrawer } from './components/ChatDrawer';
 import { Lobby } from './components/Lobby';
 import { RecordingModal } from './components/RecordingModal';
 import { ExitModal } from './components/ExitModal';
+import { AdminPanel } from './components/AdminPanel';
+import { ParticipantsDrawer } from './components/ParticipantsDrawer';
 import { createPeerConnection, replaceVideoTrack } from './utils/webrtc';
 import { MeetingRecorder, RecordedFile } from './utils/recorder';
+import { Mic, Video, VolumeX, AlertCircle, X } from 'lucide-react';
 
 export default function App() {
+  // Navigation & Admin Panel State
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState<boolean>(false);
+  const [isParticipantsDrawerOpen, setIsParticipantsDrawerOpen] = useState<boolean>(false);
+
   // Session & Room State
   const [isInMeeting, setIsInMeeting] = useState<boolean>(false);
   const [roomId, setRoomId] = useState<string>('');
@@ -26,6 +33,14 @@ export default function App() {
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
   const [isVideoMuted, setIsVideoMuted] = useState<boolean>(false);
   const [isScreenSharing, setIsScreenSharing] = useState<boolean>(false);
+
+  // Remote Media Control notifications for student
+  const [mediaAlertBanner, setMediaAlertBanner] = useState<string | null>(null);
+  const [mediaRequestPrompt, setMediaRequestPrompt] = useState<{
+    type: 'audio' | 'video';
+    message: string;
+    adminName: string;
+  } | null>(null);
 
   // Participants & Chat
   const [remoteParticipants, setRemoteParticipants] = useState<Participant[]>([]);
@@ -55,13 +70,19 @@ export default function App() {
   const recorderRef = useRef<MeetingRecorder>(new MeetingRecorder());
   const meetingTimerIntervalRef = useRef<any>(null);
 
-  // Check URL params for room invitation
+  // Check URL params for room invitation & passcode
   const [initialRoomFromUrl, setInitialRoomFromUrl] = useState<string>('');
+  const [initialPasscodeFromUrl, setInitialPasscodeFromUrl] = useState<string>('');
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const roomParam = params.get('room');
+    const passcodeParam = params.get('passcode');
     if (roomParam) {
       setInitialRoomFromUrl(roomParam.toUpperCase());
+    }
+    if (passcodeParam) {
+      setInitialPasscodeFromUrl(passcodeParam.trim());
     }
   }, []);
 
@@ -381,10 +402,122 @@ export default function App() {
       setRemoteParticipants((prev) => prev.filter((p) => p.id !== userId));
     });
 
+    // Admin command to control student media (mute, turn-off video, request on)
+    socket.on('admin-media-command', ({ mediaType, action, adminName }: { mediaType: 'audio' | 'video'; action: string; adminName: string }) => {
+      if (mediaType === 'audio') {
+        if (action === 'mute') {
+          if (localStreamRef.current) {
+            const track = localStreamRef.current.getAudioTracks()[0];
+            if (track) track.enabled = false;
+          }
+          setIsAudioMuted(true);
+          setMediaAlertBanner(`🔇 El profesor (${adminName || 'Admin'}) ha silenciado tu micrófono.`);
+          setTimeout(() => setMediaAlertBanner(null), 5000);
+        } else if (action === 'request-on') {
+          setMediaRequestPrompt({
+            type: 'audio',
+            message: `El profesor (${adminName || 'Admin'}) solicita que enciendas tu micrófono.`,
+            adminName: adminName || 'Admin'
+          });
+        }
+      } else if (mediaType === 'video') {
+        if (action === 'turn-off') {
+          if (localStreamRef.current) {
+            const track = localStreamRef.current.getVideoTracks()[0];
+            if (track) track.enabled = false;
+          }
+          setIsVideoMuted(true);
+          setMediaAlertBanner(`📷 El profesor (${adminName || 'Admin'}) ha apagado tu cámara.`);
+          setTimeout(() => setMediaAlertBanner(null), 5000);
+        } else if (action === 'request-on') {
+          setMediaRequestPrompt({
+            type: 'video',
+            message: `El profesor (${adminName || 'Admin'}) solicita que enciendas tu cámara.`,
+            adminName: adminName || 'Admin'
+          });
+        }
+      }
+    });
+
     // Admin ended room for all
     socket.on('room-ended', ({ reason }: { reason: string }) => {
       setEndedByAdminMessage(reason || 'La clase ha finalizado.');
       handleLeaveRoom();
+    });
+  };
+
+  // Student accepts prompt from Admin to turn on mic or camera
+  const handleAcceptMediaRequest = () => {
+    if (!mediaRequestPrompt) return;
+    if (mediaRequestPrompt.type === 'audio') {
+      if (localStreamRef.current) {
+        const track = localStreamRef.current.getAudioTracks()[0];
+        if (track) {
+          track.enabled = true;
+          setIsAudioMuted(false);
+          if (socketRef.current) {
+            socketRef.current.emit('toggle-media', { type: 'audio', enabled: true });
+          }
+        }
+      }
+    } else if (mediaRequestPrompt.type === 'video') {
+      if (localStreamRef.current) {
+        const track = localStreamRef.current.getVideoTracks()[0];
+        if (track) {
+          track.enabled = true;
+          setIsVideoMuted(false);
+          if (socketRef.current) {
+            socketRef.current.emit('toggle-media', { type: 'video', enabled: true });
+          }
+        }
+      }
+    }
+    setMediaRequestPrompt(null);
+  };
+
+  // Admin remote control of student media
+  const handleAdminControlMedia = (
+    targetSocketId: string,
+    mediaType: 'audio' | 'video',
+    action: 'mute' | 'unmute' | 'turn-off' | 'request-on'
+  ) => {
+    if (socketRef.current && userRole === 'admin') {
+      socketRef.current.emit('admin-control-media', {
+        targetSocketId,
+        mediaType,
+        action
+      });
+    }
+  };
+
+  // Admin mute all students
+  const handleAdminMuteAll = () => {
+    if (socketRef.current && userRole === 'admin') {
+      socketRef.current.emit('admin-mute-all');
+    }
+  };
+
+  // Start class directly from Admin Panel
+  const handleStartClassFromAdmin = async (classData: { roomId: string; title: string; instructorName: string }) => {
+    setIsAdminPanelOpen(false);
+    let stream: MediaStream | null = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+        audio: true
+      });
+    } catch (err) {
+      console.warn('Could not initialize local devices for admin:', err);
+    }
+
+    handleJoinFromLobby({
+      roomId: classData.roomId,
+      roomTitle: classData.title,
+      name: classData.instructorName || 'Prof. Administrador',
+      role: 'admin',
+      isAudioMuted: false,
+      isVideoMuted: false,
+      localStream: stream
     });
   };
 
@@ -591,8 +724,17 @@ export default function App() {
     }
   };
 
-  // If not in meeting, show clean Lobby
+  // If not in meeting, show AdminPanel or clean Lobby
   if (!isInMeeting) {
+    if (isAdminPanelOpen) {
+      return (
+        <AdminPanel
+          onBackToLobby={() => setIsAdminPanelOpen(false)}
+          onStartClassAsAdmin={handleStartClassFromAdmin}
+        />
+      );
+    }
+
     return (
       <div className="relative w-full h-full min-h-screen">
         {endedByAdminMessage && (
@@ -611,7 +753,9 @@ export default function App() {
         )}
         <Lobby
           initialRoomId={initialRoomFromUrl}
+          initialPasscode={initialPasscodeFromUrl}
           onJoin={handleJoinFromLobby}
+          onOpenAdminPanel={() => setIsAdminPanelOpen(true)}
         />
       </div>
     );
@@ -625,6 +769,62 @@ export default function App() {
       id="app-meeting-container"
       className="flex flex-col h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden select-none"
     >
+      {/* Remote Media Control Notification for Student */}
+      {mediaAlertBanner && (
+        <div
+          id="toast-media-alert"
+          className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 bg-slate-900/95 border border-blue-500/40 text-slate-100 text-xs font-semibold rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-2.5 animate-fadeIn"
+        >
+          <span>{mediaAlertBanner}</span>
+          <button
+            onClick={() => setMediaAlertBanner(null)}
+            className="text-slate-400 hover:text-slate-200 ml-2"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Admin Request to Turn On Mic / Camera Prompt */}
+      {mediaRequestPrompt && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div
+            id="modal-media-request"
+            className="w-full max-w-sm bg-slate-900 border border-blue-500/40 rounded-3xl p-6 shadow-2xl text-center"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-blue-600/20 text-blue-400 mx-auto flex items-center justify-center mb-4">
+              {mediaRequestPrompt.type === 'audio' ? (
+                <Mic className="w-6 h-6" />
+              ) : (
+                <Video className="w-6 h-6" />
+              )}
+            </div>
+            <h4 className="text-base font-bold text-slate-100 mb-2">
+              Solicitud del Profesor
+            </h4>
+            <p className="text-xs text-slate-300 leading-relaxed mb-6">
+              {mediaRequestPrompt.message}
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setMediaRequestPrompt(null)}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs transition cursor-pointer"
+              >
+                Permanecer apagado
+              </button>
+              <button
+                type="button"
+                onClick={handleAcceptMediaRequest}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs shadow-lg shadow-blue-600/30 transition cursor-pointer"
+              >
+                Activar ahora
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Header Bar */}
       <HeaderBar
         roomTitle={roomTitle}
@@ -635,6 +835,8 @@ export default function App() {
         meetingRecordingSeconds={meetingRecordingSeconds}
         isLocalRecording={isStudentRecording}
         localRecordingSeconds={studentRecordingSeconds}
+        onToggleParticipants={() => setIsParticipantsDrawerOpen((prev) => !prev)}
+        isParticipantsOpen={isParticipantsDrawerOpen}
       />
 
       {/* Main Workspace (Video grid + optional Chat Drawer) */}
@@ -651,8 +853,26 @@ export default function App() {
               stream: currentLocalStream
             }}
             remoteParticipants={remoteParticipants}
+            currentUserRole={userRole}
+            onAdminControlMedia={handleAdminControlMedia}
           />
         </main>
+
+        {/* Participants & Admin Remote Media Drawer */}
+        <ParticipantsDrawer
+          isOpen={isParticipantsDrawerOpen}
+          onClose={() => setIsParticipantsDrawerOpen(false)}
+          currentUserRole={userRole}
+          currentUserId={socketId || 'local-user'}
+          currentUserName={userName}
+          isCurrentUserMuted={isAudioMuted}
+          isCurrentUserVideoOff={isVideoMuted}
+          participants={remoteParticipants}
+          roomId={roomId}
+          roomTitle={roomTitle}
+          onAdminControlMedia={handleAdminControlMedia}
+          onAdminMuteAll={handleAdminMuteAll}
+        />
 
         {/* Chat Drawer */}
         <ChatDrawer

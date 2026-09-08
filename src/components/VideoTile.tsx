@@ -1,5 +1,14 @@
 import React, { useEffect, useRef } from 'react';
-import { Mic, MicOff, ShieldCheck, Monitor, Maximize2, Minimize2 } from 'lucide-react';
+import {
+  Mic,
+  MicOff,
+  Video,
+  VideoOff,
+  ShieldCheck,
+  Monitor,
+  Maximize2,
+  Minimize2
+} from 'lucide-react';
 import { UserRole } from '../types';
 
 interface VideoTileProps {
@@ -13,6 +22,12 @@ interface VideoTileProps {
   isScreenSharing?: boolean;
   isPinned?: boolean;
   onTogglePin?: () => void;
+  currentUserRole?: UserRole;
+  onAdminControlMedia?: (
+    targetSocketId: string,
+    mediaType: 'audio' | 'video',
+    action: 'mute' | 'unmute' | 'turn-off' | 'request-on'
+  ) => void;
 }
 
 export const VideoTile: React.FC<VideoTileProps> = ({
@@ -25,7 +40,9 @@ export const VideoTile: React.FC<VideoTileProps> = ({
   isVideoOff,
   isScreenSharing = false,
   isPinned = false,
-  onTogglePin
+  onTogglePin,
+  currentUserRole,
+  onAdminControlMedia
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -46,10 +63,12 @@ export const VideoTile: React.FC<VideoTileProps> = ({
   // Initial letter for fallback avatar
   const initial = (name || '?').trim().charAt(0).toUpperCase();
 
+  const canAdminControl = currentUserRole === 'admin' && !isLocal && role !== 'admin' && !!onAdminControlMedia;
+
   return (
     <div
       id={`video-tile-${id}`}
-      className={`relative w-full h-full bg-slate-900/90 rounded-2xl overflow-hidden border transition-all duration-300 flex items-center justify-center select-none shadow-md ${
+      className={`group relative w-full h-full bg-slate-900/90 rounded-2xl overflow-hidden border transition-all duration-300 flex items-center justify-center select-none shadow-md ${
         isPinned
           ? 'border-blue-500 shadow-blue-500/20'
           : 'border-slate-800 hover:border-slate-700'
@@ -97,17 +116,72 @@ export const VideoTile: React.FC<VideoTileProps> = ({
         )}
       </div>
 
-      {/* Top right: Pin / Expand tile control */}
-      {onTogglePin && (
-        <button
-          id={`btn-pin-tile-${id}`}
-          onClick={onTogglePin}
-          className="absolute top-3 right-3 p-1.5 rounded-lg bg-slate-900/60 hover:bg-slate-800 text-slate-300 hover:text-white transition-opacity backdrop-blur-sm z-20 opacity-0 hover:opacity-100 focus:opacity-100 group-hover:opacity-100 cursor-pointer"
-          title={isPinned ? 'Desanclar vista' : 'Fijar participante en pantalla grande'}
-        >
-          {isPinned ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-        </button>
-      )}
+      {/* Top right: Pin / Expand tile control & Admin Remote Controls */}
+      <div className="absolute top-3 right-3 flex items-center gap-1.5 z-20">
+        {/* Admin Quick Media Control Buttons for Students */}
+        {canAdminControl && (
+          <div className="flex items-center gap-1 bg-slate-950/80 backdrop-blur-md p-1 rounded-xl border border-slate-800 shadow-lg">
+            {/* Mic control */}
+            <button
+              id={`btn-tile-mic-ctrl-${id}`}
+              onClick={() =>
+                onAdminControlMedia(
+                  id,
+                  'audio',
+                  isMuted ? 'request-on' : 'mute'
+                )
+              }
+              className={`p-1.5 rounded-lg border text-xs transition cursor-pointer ${
+                isMuted
+                  ? 'bg-red-500/20 border-red-500/30 text-red-400 hover:bg-emerald-500/20 hover:text-emerald-400 hover:border-emerald-500/40'
+                  : 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400 hover:bg-red-500/20 hover:text-red-400 hover:border-red-500/40'
+              }`}
+              title={
+                isMuted
+                  ? 'Solicitar encender micrófono al estudiante'
+                  : 'Silenciar micrófono del estudiante'
+              }
+            >
+              {isMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+            </button>
+
+            {/* Camera control */}
+            <button
+              id={`btn-tile-cam-ctrl-${id}`}
+              onClick={() =>
+                onAdminControlMedia(
+                  id,
+                  'video',
+                  isVideoOff ? 'request-on' : 'turn-off'
+                )
+              }
+              className={`p-1.5 rounded-lg border text-xs transition cursor-pointer ${
+                isVideoOff
+                  ? 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-blue-500/20 hover:text-blue-400 hover:border-blue-500/40'
+                  : 'bg-blue-500/20 border-blue-500/30 text-blue-400 hover:bg-red-500/20 hover:text-red-400 hover:border-red-500/40'
+              }`}
+              title={
+                isVideoOff
+                  ? 'Solicitar encender cámara al estudiante'
+                  : 'Apagar cámara del estudiante'
+              }
+            >
+              {isVideoOff ? <VideoOff className="w-3.5 h-3.5" /> : <Video className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+        )}
+
+        {onTogglePin && (
+          <button
+            id={`btn-pin-tile-${id}`}
+            onClick={onTogglePin}
+            className="p-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white transition backdrop-blur-sm border border-slate-800 cursor-pointer"
+            title={isPinned ? 'Desanclar vista' : 'Fijar participante en pantalla grande'}
+          >
+            {isPinned ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
+        )}
+      </div>
 
       {/* Bottom info bar */}
       <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between z-20 pointer-events-none">

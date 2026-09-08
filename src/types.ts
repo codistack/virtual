@@ -34,3 +34,24 @@ export interface RecordingStatus {
   durationSeconds: number;
   isLocalOnly: boolean;
 }
+
+export interface ScheduledClass {
+  id: string; // Room ID (e.g., "MAT-4820")
+  title: string;
+  subject?: string;
+  scheduledDate: string; // "YYYY-MM-DD"
+  scheduledTime: string; // "HH:MM"
+  durationMinutes: number; // e.g. 60
+  passcode: string; // Student entry passcode, e.g. "749210"
+  description?: string;
+  instructorName: string;
+  createdAt: number;
+  status: 'scheduled' | 'live' | 'completed';
+  activeParticipantsCount?: number;
+}
+
+export interface RemoteMediaCommand {
+  mediaType: 'audio' | 'video';
+  action: 'mute' | 'unmute' | 'turn-off' | 'request-on';
+  adminName: string;
+}
