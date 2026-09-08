@@ -50,6 +50,14 @@ export interface ScheduledClass {
   activeParticipantsCount?: number;
 }
 
+export interface UserAccount {
+  email: string;
+  name: string;
+  avatarUrl?: string;
+  role?: UserRole;
+  provider: 'google' | 'guest';
+}
+
 export interface RemoteMediaCommand {
   mediaType: 'audio' | 'video';
   action: 'mute' | 'unmute' | 'turn-off' | 'request-on';

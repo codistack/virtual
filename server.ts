@@ -12,7 +12,19 @@ const app = express();
 const server = http.createServer(app);
 const PORT = 3000;
 
-app.use(express.json());
+// Middleware for JSON, form data and CORS
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 // In-memory conference room store
 interface RoomParticipant {
@@ -127,80 +139,154 @@ app.get('/api/scheduled-classes', (req, res) => {
 
 // Create new scheduled class with custom/auto code and passcode
 app.post('/api/scheduled-classes', (req, res) => {
-  const {
-    title,
-    subject,
-    scheduledDate,
-    scheduledTime,
-    durationMinutes,
-    passcode,
-    description,
-    instructorName
-  } = req.body;
+  try {
+    const body = req.body || {};
+    const {
+      id: customId,
+      title,
+      subject,
+      scheduledDate,
+      scheduledTime,
+      durationMinutes,
+      passcode,
+      description,
+      instructorName
+    } = body;
 
-  if (!title || !title.trim()) {
-    return res.status(400).json({ error: 'El título de la clase es obligatorio' });
+    if (!title || !title.toString().trim()) {
+      return res.status(400).json({ error: 'El título de la clase es obligatorio' });
+    }
+
+    const cleanSubject = (subject && subject.toString().trim()) || 'CLASE';
+    let id = (customId && customId.toString().trim().toUpperCase()) || '';
+    if (!id) {
+      const prefix = cleanSubject.replace(/[^a-zA-Z]/g, '').substring(0, 4).toUpperCase() || 'SALA';
+      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+      id = `${prefix}-${randomSuffix}`;
+    }
+
+    const cleanPasscode = (passcode && passcode.toString().trim()) 
+      ? passcode.toString().trim() 
+      : Math.floor(100000 + Math.random() * 900000).toString();
+
+    const today = new Date().toISOString().split('T')[0];
+    const currentTime = new Date().toTimeString().substring(0, 5);
+
+    const newClass: ScheduledClassRecord = {
+      id,
+      title: title.toString().trim(),
+      subject: cleanSubject,
+      scheduledDate: scheduledDate || today,
+      scheduledTime: scheduledTime || currentTime,
+      durationMinutes: Number(durationMinutes) || 60,
+      passcode: cleanPasscode,
+      description: (description && description.toString().trim()) || '',
+      instructorName: (instructorName && instructorName.toString().trim()) || 'Profesor Administrador',
+      createdAt: Date.now(),
+      status: 'scheduled'
+    };
+
+    scheduledClasses.set(id, newClass);
+    return res.status(201).json(newClass);
+  } catch (err: any) {
+    console.error('Server error creating class:', err);
+    return res.status(500).json({ error: 'Error interno del servidor al crear la clase: ' + (err?.message || '') });
   }
+});
 
-  const cleanSubject = subject?.trim() || 'CLASE';
-  const prefix = cleanSubject.replace(/[^a-zA-Z]/g, '').substring(0, 4).toUpperCase() || 'SALA';
-  const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-  const id = `${prefix}-${randomSuffix}`;
-
-  const cleanPasscode = (passcode && passcode.trim()) ? passcode.trim() : Math.floor(100000 + Math.random() * 900000).toString();
-  const today = new Date().toISOString().split('T')[0];
-  const currentTime = new Date().toTimeString().substring(0, 5);
-
-  const newClass: ScheduledClassRecord = {
-    id,
-    title: title.trim(),
-    subject: cleanSubject,
-    scheduledDate: scheduledDate || today,
-    scheduledTime: scheduledTime || currentTime,
-    durationMinutes: Number(durationMinutes) || 60,
-    passcode: cleanPasscode,
-    description: description?.trim() || '',
-    instructorName: instructorName?.trim() || 'Profesor Administrador',
-    createdAt: Date.now(),
-    status: 'scheduled'
-  };
-
-  scheduledClasses.set(id, newClass);
-  res.json(newClass);
+// Bulk sync scheduled classes (e.g. from local storage resilience)
+app.post('/api/scheduled-classes/sync', (req, res) => {
+  try {
+    const { classes } = req.body || {};
+    if (Array.isArray(classes)) {
+      for (const item of classes) {
+        if (item && item.id && !scheduledClasses.has(item.id)) {
+          scheduledClasses.set(item.id, {
+            id: item.id,
+            title: item.title || `Clase ${item.id}`,
+            subject: item.subject || 'General',
+            scheduledDate: item.scheduledDate || new Date().toISOString().split('T')[0],
+            scheduledTime: item.scheduledTime || '15:00',
+            durationMinutes: item.durationMinutes || 60,
+            passcode: item.passcode || '123456',
+            description: item.description || '',
+            instructorName: item.instructorName || 'Profesor',
+            createdAt: item.createdAt || Date.now(),
+            status: item.status || 'scheduled'
+          });
+        }
+      }
+    }
+    return res.json({ success: true, count: scheduledClasses.size });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Error sincronizando clases: ' + (err?.message || '') });
+  }
 });
 
 // Delete scheduled class
 app.delete('/api/scheduled-classes/:id', (req, res) => {
-  const id = req.params.id.toUpperCase();
-  if (scheduledClasses.has(id)) {
-    scheduledClasses.delete(id);
-    return res.json({ success: true, id });
+  try {
+    const id = req.params.id.toUpperCase();
+    if (scheduledClasses.has(id)) {
+      scheduledClasses.delete(id);
+      return res.json({ success: true, id });
+    }
+    return res.status(404).json({ error: 'Clase no encontrada' });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Error al eliminar clase' });
   }
-  res.status(404).json({ error: 'Clase no encontrada' });
 });
 
 // Verify passcode for student join
 app.post('/api/scheduled-classes/:id/verify', (req, res) => {
-  const id = req.params.id.toUpperCase();
-  const { passcode } = req.body;
-  const scheduled = scheduledClasses.get(id);
+  try {
+    const id = req.params.id.toUpperCase();
+    const { passcode } = req.body || {};
+    const scheduled = scheduledClasses.get(id);
 
-  if (!scheduled) {
-    return res.json({ valid: true, requiresPasscode: false });
+    if (!scheduled) {
+      return res.json({ valid: true, requiresPasscode: false });
+    }
+
+    if (!scheduled.passcode) {
+      return res.json({ valid: true, requiresPasscode: false, title: scheduled.title });
+    }
+
+    if (scheduled.passcode.toUpperCase() === (passcode || '').toString().trim().toUpperCase()) {
+      return res.json({ valid: true, title: scheduled.title });
+    }
+
+    return res.status(401).json({
+      valid: false,
+      error: 'Código de inicio de sesión incorrecto. Verifica el código proporcionado por tu profesor.'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Error al verificar código' });
   }
+});
 
-  if (!scheduled.passcode) {
-    return res.json({ valid: true, requiresPasscode: false, title: scheduled.title });
+// Google Account session helper
+app.post('/api/auth/google', (req, res) => {
+  try {
+    const { email, name, avatarUrl } = req.body || {};
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({ error: 'Correo de Gmail inválido.' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanName = (name && name.trim()) || cleanEmail.split('@')[0];
+    const user = {
+      email: cleanEmail,
+      name: cleanName,
+      avatarUrl: avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(cleanName)}&background=2563eb&color=fff`,
+      provider: 'google',
+      signedInAt: Date.now()
+    };
+
+    return res.json({ success: true, user });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Error al procesar sesión con Google' });
   }
-
-  if (scheduled.passcode.toUpperCase() === (passcode || '').toString().trim().toUpperCase()) {
-    return res.json({ valid: true, title: scheduled.title });
-  }
-
-  return res.status(401).json({
-    valid: false,
-    error: 'Código de inicio de sesión incorrecto. Verifica el código proporcionado por tu profesor.'
-  });
 });
 
 app.post('/api/rooms', (req, res) => {

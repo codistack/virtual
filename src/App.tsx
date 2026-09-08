@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { Participant, ChatMessage, UserRole } from './types';
+import { Participant, ChatMessage, UserRole, UserAccount } from './types';
 import { HeaderBar } from './components/HeaderBar';
 import { VideoGrid } from './components/VideoGrid';
 import { BottomControls } from './components/BottomControls';
@@ -10,6 +10,7 @@ import { RecordingModal } from './components/RecordingModal';
 import { ExitModal } from './components/ExitModal';
 import { AdminPanel } from './components/AdminPanel';
 import { ParticipantsDrawer } from './components/ParticipantsDrawer';
+import { GoogleSignInModal } from './components/GoogleSignInModal';
 import { createPeerConnection, replaceVideoTrack } from './utils/webrtc';
 import { MeetingRecorder, RecordedFile } from './utils/recorder';
 import { Mic, Video, VolumeX, AlertCircle, X } from 'lucide-react';
@@ -18,6 +19,16 @@ export default function App() {
   // Navigation & Admin Panel State
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState<boolean>(false);
   const [isParticipantsDrawerOpen, setIsParticipantsDrawerOpen] = useState<boolean>(false);
+
+  // Google Account / Sign-in state
+  const [userAccount, setUserAccount] = useState<UserAccount | null>(() => {
+    try {
+      const saved = localStorage.getItem('virtual_class_user_account');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return null;
+  });
+  const [isGoogleSignInModalOpen, setIsGoogleSignInModalOpen] = useState<boolean>(false);
 
   // Session & Room State
   const [isInMeeting, setIsInMeeting] = useState<boolean>(false);
@@ -728,10 +739,32 @@ export default function App() {
   if (!isInMeeting) {
     if (isAdminPanelOpen) {
       return (
-        <AdminPanel
-          onBackToLobby={() => setIsAdminPanelOpen(false)}
-          onStartClassAsAdmin={handleStartClassFromAdmin}
-        />
+        <>
+          <AdminPanel
+            onBackToLobby={() => setIsAdminPanelOpen(false)}
+            onStartClassAsAdmin={handleStartClassFromAdmin}
+            currentUserAccount={userAccount}
+            onOpenGoogleSignIn={() => setIsGoogleSignInModalOpen(true)}
+            onSignOutGoogle={() => {
+              setUserAccount(null);
+              try {
+                localStorage.removeItem('virtual_class_user_account');
+              } catch {}
+            }}
+          />
+          <GoogleSignInModal
+            isOpen={isGoogleSignInModalOpen}
+            onClose={() => setIsGoogleSignInModalOpen(false)}
+            onSuccess={(account) => {
+              setUserAccount(account);
+              try {
+                localStorage.setItem('virtual_class_user_account', JSON.stringify(account));
+              } catch {}
+              setIsGoogleSignInModalOpen(false);
+            }}
+            currentEmail="codistack@gmail.com"
+          />
+        </>
       );
     }
 
@@ -754,8 +787,28 @@ export default function App() {
         <Lobby
           initialRoomId={initialRoomFromUrl}
           initialPasscode={initialPasscodeFromUrl}
+          currentUserAccount={userAccount}
+          onOpenGoogleSignIn={() => setIsGoogleSignInModalOpen(true)}
+          onSignOutGoogle={() => {
+            setUserAccount(null);
+            try {
+              localStorage.removeItem('virtual_class_user_account');
+            } catch {}
+          }}
           onJoin={handleJoinFromLobby}
           onOpenAdminPanel={() => setIsAdminPanelOpen(true)}
+        />
+        <GoogleSignInModal
+          isOpen={isGoogleSignInModalOpen}
+          onClose={() => setIsGoogleSignInModalOpen(false)}
+          onSuccess={(account) => {
+            setUserAccount(account);
+            try {
+              localStorage.setItem('virtual_class_user_account', JSON.stringify(account));
+            } catch {}
+            setIsGoogleSignInModalOpen(false);
+          }}
+          currentEmail="codistack@gmail.com"
         />
       </div>
     );

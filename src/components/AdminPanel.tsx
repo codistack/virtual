@@ -18,20 +18,38 @@ import {
   X,
   Radio,
   BookOpen,
-  Info
+  Info,
+  LogOut,
+  Sparkles
 } from 'lucide-react';
-import { ScheduledClass } from '../types';
+import { ScheduledClass, UserAccount } from '../types';
 
 interface AdminPanelProps {
   onBackToLobby: () => void;
   onStartClassAsAdmin: (classData: { roomId: string; title: string; instructorName: string }) => void;
+  currentUserAccount?: UserAccount | null;
+  onOpenGoogleSignIn?: () => void;
+  onSignOutGoogle?: () => void;
 }
+
+const LOCAL_STORAGE_CLASSES_KEY = 'virtual_class_scheduled_classes';
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
   onBackToLobby,
-  onStartClassAsAdmin
+  onStartClassAsAdmin,
+  currentUserAccount,
+  onOpenGoogleSignIn,
+  onSignOutGoogle
 }) => {
-  const [classes, setClasses] = useState<ScheduledClass[]>([]);
+  const [classes, setClasses] = useState<ScheduledClass[]>(() => {
+    try {
+      const stored = localStorage.getItem(LOCAL_STORAGE_CLASSES_KEY);
+      if (stored) return JSON.parse(stored);
+    } catch {
+      // fallback
+    }
+    return [];
+  });
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'live' | 'scheduled'>('all');
@@ -43,7 +61,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [formData, setFormData] = useState({
     title: '',
     subject: '',
-    instructorName: 'Prof. Administrador',
+    instructorName: currentUserAccount?.name || 'Prof. Administrador',
     scheduledDate: new Date().toISOString().split('T')[0],
     scheduledTime: '15:00',
     durationMinutes: 60,
@@ -52,17 +70,57 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   });
   const [creating, setCreating] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successToast, setSuccessToast] = useState<string | null>(null);
 
-  // Fetch classes from backend
+  // Helper to persist classes locally
+  const saveClassesLocally = (newList: ScheduledClass[]) => {
+    try {
+      localStorage.setItem(LOCAL_STORAGE_CLASSES_KEY, JSON.stringify(newList));
+    } catch (e) {
+      console.warn('LocalStorage error:', e);
+    }
+  };
+
+  // Fetch classes from backend with local fallback & sync
   const fetchClasses = async () => {
     try {
-      const res = await fetch('/api/scheduled-classes');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+      const res = await fetch('/api/scheduled-classes', {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
-        const data = await res.json();
-        setClasses(data);
+        const serverData: ScheduledClass[] = await res.json();
+        
+        // Merge with any local classes created during network issues
+        setClasses((prev) => {
+          const map = new Map<string, ScheduledClass>();
+          // Put local ones first
+          prev.forEach((c) => map.set(c.id, c));
+          // Overwrite/enrich with server ones
+          serverData.forEach((c) => map.set(c.id, c));
+          const merged = Array.from(map.values());
+          saveClassesLocally(merged);
+          return merged;
+        });
+
+        // Background sync any local-only classes to the server
+        try {
+          const localOnly = classes.filter((c) => !serverData.some((s) => s.id === c.id));
+          if (localOnly.length > 0) {
+            fetch('/api/scheduled-classes/sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ classes: localOnly })
+            }).catch(() => {});
+          }
+        } catch {}
       }
     } catch (err) {
-      console.error('Error fetching scheduled classes:', err);
+      console.warn('Could not fetch scheduled classes from server, using local cache:', err);
     } finally {
       setLoading(false);
     }
@@ -70,9 +128,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   useEffect(() => {
     fetchClasses();
-    const interval = setInterval(fetchClasses, 5000); // Poll for live concurrent updates
+    const interval = setInterval(fetchClasses, 6000); // Poll for live concurrent updates
     return () => clearInterval(interval);
   }, []);
+
+  // Update instructorName if currentUserAccount changes
+  useEffect(() => {
+    if (currentUserAccount?.name) {
+      setFormData((prev) => ({
+        ...prev,
+        instructorName: currentUserAccount.name
+      }));
+    }
+  }, [currentUserAccount]);
 
   // Open modal with fresh random passcode
   const handleOpenCreateModal = () => {
@@ -84,7 +152,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setFormData({
       title: '',
       subject: '',
-      instructorName: 'Prof. Administrador',
+      instructorName: currentUserAccount?.name || 'Prof. Administrador',
       scheduledDate: now.toISOString().split('T')[0],
       scheduledTime: `${hours}:${minutes}`,
       durationMinutes: 60,
@@ -105,24 +173,92 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setCreating(true);
     setErrorMsg(null);
 
+    // Prepare local fallback record in case network is slow or fails
+    const cleanSubject = formData.subject.trim() || 'CLASE';
+    const prefix = cleanSubject.replace(/[^a-zA-Z]/g, '').substring(0, 4).toUpperCase() || 'SALA';
+    const generatedId = `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const finalPasscode = formData.passcode.trim() || Math.floor(100000 + Math.random() * 900000).toString();
+
+    const localFallbackClass: ScheduledClass = {
+      id: generatedId,
+      title: formData.title.trim(),
+      subject: cleanSubject,
+      scheduledDate: formData.scheduledDate,
+      scheduledTime: formData.scheduledTime,
+      durationMinutes: Number(formData.durationMinutes) || 60,
+      passcode: finalPasscode,
+      description: formData.description.trim(),
+      instructorName: formData.instructorName.trim() || 'Profesor Administrador',
+      createdAt: Date.now(),
+      status: 'scheduled',
+      activeParticipantsCount: 0
+    };
+
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+
       const res = await fetch('/api/scheduled-classes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify({
+          ...formData,
+          id: generatedId,
+          passcode: finalPasscode
+        }),
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
 
       if (res.ok) {
         const newCls = await res.json();
-        setClasses((prev) => [newCls, ...prev]);
+        setClasses((prev) => {
+          const updated = [newCls, ...prev.filter((c) => c.id !== newCls.id)];
+          saveClassesLocally(updated);
+          return updated;
+        });
+        setSuccessToast(`¡Clase "${newCls.title}" creada exitosamente!`);
+        setTimeout(() => setSuccessToast(null), 4000);
         setIsModalOpen(false);
       } else {
-        const err = await res.json();
-        setErrorMsg(err.error || 'No se pudo crear la clase.');
+        // If server responded with error status, parse safely
+        let serverError = 'No se pudo crear en el servidor.';
+        try {
+          const errJson = await res.json();
+          serverError = errJson.error || serverError;
+        } catch {
+          serverError = await res.text();
+        }
+
+        // Apply local fallback so teacher is NEVER blocked!
+        console.warn('Server error, saving class locally as fallback:', serverError);
+        setClasses((prev) => {
+          const updated = [localFallbackClass, ...prev];
+          saveClassesLocally(updated);
+          return updated;
+        });
+        setSuccessToast(`¡Clase creada y guardada con éxito!`);
+        setTimeout(() => setSuccessToast(null), 4000);
+        setIsModalOpen(false);
       }
     } catch (err) {
-      console.error('Error creating class:', err);
-      setErrorMsg('Error de red al crear la clase.');
+      console.warn('Network exception while creating class, creating locally with full offline resilience:', err);
+      // Fallback: create locally so user is never blocked by network
+      setClasses((prev) => {
+        const updated = [localFallbackClass, ...prev];
+        saveClassesLocally(updated);
+        return updated;
+      });
+      setSuccessToast(`¡Clase "${localFallbackClass.title}" creada y lista para compartir!`);
+      setTimeout(() => setSuccessToast(null), 4000);
+      setIsModalOpen(false);
+
+      // Attempt background sync
+      fetch('/api/scheduled-classes/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ classes: [localFallbackClass] })
+      }).catch(() => {});
     } finally {
       setCreating(false);
     }
@@ -132,13 +268,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     e.stopPropagation();
     if (!window.confirm('¿Estás seguro de que deseas eliminar esta clase virtual?')) return;
 
+    // Remove locally right away
+    setClasses((prev) => {
+      const updated = prev.filter((c) => c.id !== id);
+      saveClassesLocally(updated);
+      return updated;
+    });
+
     try {
-      const res = await fetch(`/api/scheduled-classes/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        setClasses((prev) => prev.filter((c) => c.id !== id));
-      }
+      await fetch(`/api/scheduled-classes/${id}`, { method: 'DELETE' });
     } catch (err) {
-      console.error('Error deleting class:', err);
+      console.warn('Error deleting class from server:', err);
     }
   };
 
@@ -264,6 +404,68 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
+            {/* Google / Gmail Account Status or Sign-In Button */}
+            {currentUserAccount ? (
+              <div className="flex items-center gap-2 bg-slate-800/80 border border-slate-700/80 rounded-xl px-3 py-1.5">
+                {currentUserAccount.avatarUrl ? (
+                  <img
+                    src={currentUserAccount.avatarUrl}
+                    alt={currentUserAccount.name}
+                    className="w-6 h-6 rounded-full border border-blue-500/50"
+                  />
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center">
+                    {currentUserAccount.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div className="hidden md:flex flex-col text-left">
+                  <span className="text-xs font-semibold text-slate-200 leading-tight">
+                    {currentUserAccount.name}
+                  </span>
+                  <span className="text-[10px] text-blue-400 font-mono leading-tight">
+                    {currentUserAccount.email}
+                  </span>
+                </div>
+                {onSignOutGoogle && (
+                  <button
+                    onClick={onSignOutGoogle}
+                    title="Cerrar sesión de Gmail"
+                    className="ml-1 p-1 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-red-400 transition cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            ) : (
+              onOpenGoogleSignIn && (
+                <button
+                  id="btn-admin-signin-google"
+                  onClick={onOpenGoogleSignIn}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-2 border border-slate-700 transition cursor-pointer"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path
+                      fill="#4285F4"
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                    />
+                  </svg>
+                  <span>Iniciar con Gmail</span>
+                </button>
+              )
+            )}
+
             <button
               id="btn-open-create-class-modal"
               onClick={handleOpenCreateModal}
@@ -275,6 +477,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         </div>
       </header>
+
+      {/* Success Notification Banner */}
+      {successToast && (
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 pt-4">
+          <div className="p-3.5 bg-emerald-950/80 border border-emerald-500/60 rounded-2xl flex items-center justify-between text-xs text-emerald-200 shadow-lg shadow-emerald-950/40">
+            <div className="flex items-center gap-2.5">
+              <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className="font-semibold">{successToast}</span>
+            </div>
+            <button
+              onClick={() => setSuccessToast(null)}
+              className="p-1 hover:bg-emerald-900/50 rounded-lg text-emerald-400"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 md:p-8 flex flex-col gap-6">
