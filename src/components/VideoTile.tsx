@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Mic,
   MicOff,
@@ -45,20 +45,78 @@ export const VideoTile: React.FC<VideoTileProps> = ({
   onAdminControlMedia
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [autoplayBlocked, setAutoplayBlocked] = useState<boolean>(false);
+  const [, setTrackCounter] = useState<number>(0);
 
   useEffect(() => {
     const videoElement = videoRef.current;
     if (!videoElement) return;
 
     if (stream) {
-      videoElement.srcObject = stream;
-      videoElement.play().catch((err) => {
-        console.warn(`Video play error for ${name}:`, err);
+      if (videoElement.srcObject !== stream) {
+        videoElement.srcObject = stream;
+      }
+      
+      const playPromise = videoElement.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            setAutoplayBlocked(false);
+          })
+          .catch((err) => {
+            if (err.name === 'NotAllowedError' && !isLocal) {
+              setAutoplayBlocked(true);
+            }
+            console.warn(`Video playback info for ${name}:`, err.message || err);
+          });
+      }
+
+      // Re-trigger render when tracks are added/removed/unmuted
+      const handleTrackUpdate = () => {
+        setTrackCounter((c) => c + 1);
+        if (videoRef.current && videoRef.current.srcObject !== stream) {
+          videoRef.current.srcObject = stream;
+        }
+        videoRef.current?.play().catch(() => {});
+      };
+
+      stream.addEventListener('addtrack', handleTrackUpdate);
+      stream.addEventListener('removetrack', handleTrackUpdate);
+      stream.getTracks().forEach((track) => {
+        track.addEventListener('unmute', handleTrackUpdate);
+        track.addEventListener('mute', handleTrackUpdate);
       });
+
+      return () => {
+        stream.removeEventListener('addtrack', handleTrackUpdate);
+        stream.removeEventListener('removetrack', handleTrackUpdate);
+        stream.getTracks().forEach((track) => {
+          track.removeEventListener('unmute', handleTrackUpdate);
+          track.removeEventListener('mute', handleTrackUpdate);
+        });
+      };
     } else {
       videoElement.srcObject = null;
     }
-  }, [stream]);
+  }, [stream, isLocal, name]);
+
+  const handleManualPlay = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (videoRef.current) {
+      videoRef.current.play().then(() => {
+        setAutoplayBlocked(false);
+      }).catch(() => {});
+    }
+  };
+
+  // Check if active video track exists
+  const hasLiveVideoTrack = Boolean(
+    stream &&
+    stream.getVideoTracks().length > 0 &&
+    stream.getVideoTracks().some((t) => t.readyState === 'live')
+  );
+
+  const shouldShowAvatar = isVideoOff || !stream || !hasLiveVideoTrack;
 
   // Initial letter for fallback avatar
   const initial = (name || '?').trim().charAt(0).toUpperCase();
@@ -81,12 +139,25 @@ export const VideoTile: React.FC<VideoTileProps> = ({
         playsInline
         muted={isLocal} // Mute local audio to prevent feedback loop
         className={`w-full h-full object-cover transition-opacity duration-300 ${
-          isVideoOff || !stream ? 'opacity-0 absolute pointer-events-none' : 'opacity-100'
+          shouldShowAvatar ? 'opacity-0 absolute pointer-events-none' : 'opacity-100'
         } ${isLocal && !isScreenSharing ? 'scale-x-[-1]' : ''}`} // Mirror local camera (except screen share)
       />
 
+      {/* Autoplay blocked banner for remote participants */}
+      {autoplayBlocked && !isLocal && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/80 p-4">
+          <button
+            onClick={handleManualPlay}
+            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs flex items-center gap-2 shadow-lg cursor-pointer"
+          >
+            <Mic className="w-4 h-4" />
+            <span>Activar audio de {name}</span>
+          </button>
+        </div>
+      )}
+
       {/* Camera Off Avatar Fallback */}
-      {(isVideoOff || !stream) && (
+      {shouldShowAvatar && (
         <div
           id={`avatar-fallback-${id}`}
           className="flex flex-col items-center justify-center gap-3 p-4 text-center z-10"

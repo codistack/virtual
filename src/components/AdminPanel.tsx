@@ -26,7 +26,7 @@ import { ScheduledClass, UserAccount } from '../types';
 
 interface AdminPanelProps {
   onBackToLobby: () => void;
-  onStartClassAsAdmin: (classData: { roomId: string; title: string; instructorName: string }) => void;
+  onStartClassAsAdmin: (classData: { roomId: string; title: string; instructorName: string; passcode?: string }) => void;
   currentUserAccount?: UserAccount | null;
   onOpenGoogleSignIn?: () => void;
   onSignOutGoogle?: () => void;
@@ -685,7 +685,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           onStartClassAsAdmin({
                             roomId: cls.id,
                             title: cls.title,
-                            instructorName: cls.instructorName
+                            instructorName: cls.instructorName,
+                            passcode: cls.passcode
                           })
                         }
                         className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-semibold flex items-center gap-2 shadow-md shadow-emerald-600/30 transition cursor-pointer"

@@ -6,6 +6,7 @@ import { formatDuration } from '../utils/recorder';
 interface HeaderBarProps {
   roomTitle: string;
   roomId: string;
+  passcode?: string;
   role: UserRole;
   participantCount: number;
   isMeetingRecording: boolean;
@@ -19,6 +20,7 @@ interface HeaderBarProps {
 export const HeaderBar: React.FC<HeaderBarProps> = ({
   roomTitle,
   roomId,
+  passcode,
   role,
   participantCount,
   isMeetingRecording,
@@ -29,26 +31,45 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   isParticipantsOpen = false
 }) => {
   const [copied, setCopied] = useState(false);
+  const [copiedPasscode, setCopiedPasscode] = useState(false);
+
+  const getDirectLink = () => {
+    const origin = window.location.origin;
+    const pathname = window.location.pathname;
+    const passParam = passcode ? `&passcode=${encodeURIComponent(passcode)}` : '';
+    return `${origin}${pathname}?room=${encodeURIComponent(roomId)}${passParam}`;
+  };
 
   const handleCopyLink = async () => {
-    const fullUrl = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
+    const fullUrl = getDirectLink();
     try {
       await navigator.clipboard.writeText(fullUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     } catch {
-      // Fallback
       prompt('Copia el enlace de la sala:', fullUrl);
     }
   };
 
+  const handleCopyPasscodeOnly = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!passcode) return;
+    try {
+      await navigator.clipboard.writeText(passcode);
+      setCopiedPasscode(true);
+      setTimeout(() => setCopiedPasscode(false), 2000);
+    } catch {}
+  };
+
   const handleShareWhatsApp = () => {
-    const fullUrl = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
+    const fullUrl = getDirectLink();
     const msg =
       `📚 *Enlace para unirse a la clase virtual*\n\n` +
       `📌 *Clase:* ${roomTitle}\n` +
-      `🆔 *ID de Sala:* *${roomId}*\n\n` +
-      `🔗 *Entra ahora:* \n${fullUrl}`;
+      `🆔 *ID de Sala:* *${roomId}*\n` +
+      (passcode ? `🔑 *Código de inicio de sesión:* *${passcode}*\n\n` : '\n') +
+      `🔗 *Entra directamente aquí:* \n${fullUrl}\n\n` +
+      `_Abre el enlace para sincronizarte en vivo con audio y video._`;
     window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, '_blank');
   };
 
@@ -60,26 +81,45 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
       {/* Left: Meeting title and Room ID with Copy Link */}
       <div className="flex items-center gap-3 md:gap-4 min-w-0">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center font-bold text-white shadow-sm shadow-blue-500/30">
+          <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center font-bold text-white shadow-sm shadow-blue-500/30 shrink-0">
             <Sparkles className="w-4 h-4" />
           </div>
           <div className="min-w-0">
             <h1 className="text-sm md:text-base font-semibold text-slate-100 truncate max-w-[180px] sm:max-w-xs md:max-w-md">
               {roomTitle || 'Clase Virtual'}
             </h1>
-            <div className="flex items-center gap-2 text-xs text-slate-400">
+            <div className="flex items-center gap-2 text-xs text-slate-400 flex-wrap">
               <span className="font-mono text-slate-300">ID: {roomId}</span>
+
+              {passcode && (
+                <>
+                  <span className="text-slate-600">•</span>
+                  <button
+                    onClick={handleCopyPasscodeOnly}
+                    title="Copiar código de acceso"
+                    className="flex items-center gap-1 font-mono text-blue-300 hover:text-white bg-blue-950/40 px-1.5 py-0.5 rounded border border-blue-500/30 cursor-pointer"
+                  >
+                    <span>Código: {passcode}</span>
+                    {copiedPasscode ? (
+                      <Check className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3 h-3 text-blue-400" />
+                    )}
+                  </button>
+                </>
+              )}
+
               <span className="text-slate-600">•</span>
               <button
                 id="btn-copy-invite-link"
                 onClick={handleCopyLink}
                 className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors font-medium cursor-pointer"
-                title="Copiar enlace de invitación"
+                title="Copiar enlace de invitación completo con código"
               >
                 {copied ? (
                   <>
                     <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="text-emerald-400">Enlace copiado</span>
+                    <span className="text-emerald-400 font-semibold">¡Enlace copiado!</span>
                   </>
                 ) : (
                   <>

@@ -32,6 +32,7 @@ interface LobbyProps {
     isAudioMuted: boolean;
     isVideoMuted: boolean;
     localStream: MediaStream | null;
+    passcode?: string;
   }) => void;
   onOpenAdminPanel?: () => void;
 }
@@ -233,7 +234,9 @@ export const Lobby: React.FC<LobbyProps> = ({
           return;
         } else if (verifyRes.ok) {
           const okData = await verifyRes.json();
-          if (okData.class?.title) {
+          if (okData.title) {
+            resolvedTitle = okData.title;
+          } else if (okData.class?.title) {
             resolvedTitle = okData.class.title;
           }
         }
@@ -256,7 +259,8 @@ export const Lobby: React.FC<LobbyProps> = ({
         role: 'student',
         isAudioMuted,
         isVideoMuted,
-        localStream
+        localStream,
+        passcode: studentPasscode.trim()
       });
     }
   };

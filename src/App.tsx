@@ -11,7 +11,7 @@ import { ExitModal } from './components/ExitModal';
 import { AdminPanel } from './components/AdminPanel';
 import { ParticipantsDrawer } from './components/ParticipantsDrawer';
 import { GoogleSignInModal } from './components/GoogleSignInModal';
-import { createPeerConnection, replaceVideoTrack } from './utils/webrtc';
+import { createPeerConnection, replaceVideoTrack, replaceAudioTrack } from './utils/webrtc';
 import { MeetingRecorder, RecordedFile } from './utils/recorder';
 import { Mic, Video, VolumeX, AlertCircle, X } from 'lucide-react';
 
@@ -34,6 +34,7 @@ export default function App() {
   const [isInMeeting, setIsInMeeting] = useState<boolean>(false);
   const [roomId, setRoomId] = useState<string>('');
   const [roomTitle, setRoomTitle] = useState<string>('');
+  const [roomPasscode, setRoomPasscode] = useState<string>('');
   const [userName, setUserName] = useState<string>('');
   const [userRole, setUserRole] = useState<UserRole>('student');
   const [socketId, setSocketId] = useState<string>('');
@@ -77,6 +78,7 @@ export default function App() {
   // Refs for WebRTC & Socket
   const socketRef = useRef<Record<string, any> | null>(null);
   const peerConnectionsRef = useRef<Record<string, RTCPeerConnection>>({});
+  const pendingIceCandidatesRef = useRef<Record<string, RTCIceCandidateInit[]>>({});
   const localStreamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MeetingRecorder>(new MeetingRecorder());
   const meetingTimerIntervalRef = useRef<any>(null);
@@ -94,12 +96,38 @@ export default function App() {
     }
     if (passcodeParam) {
       setInitialPasscodeFromUrl(passcodeParam.trim());
+      setRoomPasscode(passcodeParam.trim());
     }
   }, []);
 
-  // Sync ref with local stream
+  // Sync ref with local stream & update all active peer connections
   useEffect(() => {
     localStreamRef.current = localStream;
+    if (!localStream) return;
+
+    // Attach or replace tracks on all active peer connections
+    Object.keys(peerConnectionsRef.current).forEach((targetId) => {
+      const pc = peerConnectionsRef.current[targetId];
+      if (!pc || pc.signalingState === 'closed') return;
+
+      localStream.getTracks().forEach((track) => {
+        const senders = pc.getSenders();
+        const existingSender = senders.find(
+          (s) => (s.track && s.track.kind === track.kind) || s.kind === track.kind
+        );
+        if (existingSender) {
+          existingSender.replaceTrack(track).catch((err) => {
+            console.warn('Could not replace track on peer connection:', err);
+          });
+        } else {
+          try {
+            pc.addTrack(track, localStream);
+          } catch (err) {
+            console.warn('Could not add track to existing peer connection:', err);
+          }
+        }
+      });
+    });
   }, [localStream]);
 
   // Clean up WebRTC peer connections
@@ -107,10 +135,13 @@ export default function App() {
     Object.keys(peerConnectionsRef.current).forEach((key) => {
       const pc = peerConnectionsRef.current[key];
       if (pc) {
-        pc.close();
+        try {
+          pc.close();
+        } catch {}
       }
     });
     peerConnectionsRef.current = {};
+    pendingIceCandidatesRef.current = {};
   }, []);
 
   // Leave room handler
@@ -166,6 +197,7 @@ export default function App() {
     isAudioMuted: boolean;
     isVideoMuted: boolean;
     localStream: MediaStream | null;
+    passcode?: string;
   }) => {
     setRoomId(config.roomId);
     setRoomTitle(config.roomTitle);
@@ -173,6 +205,11 @@ export default function App() {
     setUserRole(config.role);
     setIsAudioMuted(config.isAudioMuted);
     setIsVideoMuted(config.isVideoMuted);
+
+    const activePasscode = config.passcode || roomPasscode || initialPasscodeFromUrl;
+    if (activePasscode) {
+      setRoomPasscode(activePasscode);
+    }
 
     // Enter meeting room immediately without blocking
     setIsInMeeting(true);
@@ -184,7 +221,10 @@ export default function App() {
     // Asynchronously try to get media stream if not available from lobby
     if (!activeStream && navigator.mediaDevices?.getUserMedia) {
       navigator.mediaDevices
-        .getUserMedia({ video: true, audio: true })
+        .getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+          audio: true
+        })
         .then((stream) => {
           setLocalStream(stream);
           localStreamRef.current = stream;
@@ -204,6 +244,67 @@ export default function App() {
     });
     socketRef.current = socket;
 
+    // Helper: Drain queued ICE candidates once remote description is set
+    const drainPendingIceCandidates = async (peerId: string, pc: RTCPeerConnection) => {
+      const candidates = pendingIceCandidatesRef.current[peerId] || [];
+      if (candidates.length > 0) {
+        for (const cand of candidates) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(cand));
+          } catch (e) {
+            console.warn('Error applying queued ICE candidate:', e);
+          }
+        }
+        pendingIceCandidatesRef.current[peerId] = [];
+      }
+    };
+
+    // Helper: Get or create WebRTC Peer Connection
+    const getOrCreatePeerConnection = (targetId: string): RTCPeerConnection => {
+      let pc = peerConnectionsRef.current[targetId];
+      if (pc && pc.signalingState !== 'closed') {
+        return pc;
+      }
+
+      pc = createPeerConnection(
+        targetId,
+        localStreamRef.current,
+        (candidate) => {
+          socket.emit('signal', {
+            target: targetId,
+            signalData: candidate,
+            type: 'candidate'
+          });
+        },
+        (event) => {
+          // Received remote audio or video track
+          setRemoteParticipants((prev) =>
+            prev.map((p) => {
+              if (p.id === targetId) {
+                const existingTracks = p.stream
+                  ? p.stream.getTracks().filter((t) => t.id !== event.track.id && t.kind !== event.track.kind)
+                  : [];
+                const updatedStream = new MediaStream([...existingTracks, event.track]);
+                return { ...p, stream: updatedStream };
+              }
+              return p;
+            })
+          );
+        },
+        (state) => {
+          console.log(`Peer ${targetId} connection state:`, state);
+          if (state === 'failed') {
+            try {
+              (pc as any).restartIce?.();
+            } catch {}
+          }
+        }
+      );
+
+      peerConnectionsRef.current[targetId] = pc;
+      return pc;
+    };
+
     const emitJoin = () => {
       setSocketId(socket.id || '');
       socket.emit('join-room', {
@@ -212,7 +313,8 @@ export default function App() {
         name: config.name,
         role: config.role,
         isMuted: config.isAudioMuted,
-        isVideoOff: config.isVideoMuted
+        isVideoOff: config.isVideoMuted,
+        passcode: activePasscode
       });
     };
 
@@ -228,13 +330,16 @@ export default function App() {
 
     // Room joined callback from server
     socket.on('room-joined', async (data: {
-      room: { id: string; title: string; isRecording: boolean };
+      room: { id: string; title: string; isRecording: boolean; passcode?: string };
       self: any;
       participants: Participant[];
       messages: ChatMessage[];
     }) => {
       if (data.room?.title) {
         setRoomTitle(data.room.title);
+      }
+      if (data.room?.passcode && !activePasscode) {
+        setRoomPasscode(data.room.passcode);
       }
       setIsMeetingRecording(!!data.room?.isRecording);
       setChatMessages(data.messages || []);
@@ -248,36 +353,8 @@ export default function App() {
 
       // Create WebRTC offer for each existing participant
       for (const participant of data.participants) {
-        const pc = createPeerConnection(
-          participant.id,
-          localStreamRef.current,
-          (candidate) => {
-            socket.emit('signal', {
-              target: participant.id,
-              signalData: candidate,
-              type: 'candidate'
-            });
-          },
-          (event) => {
-            // Received remote track
-            setRemoteParticipants((prev) =>
-              prev.map((p) => {
-                if (p.id === participant.id) {
-                  const s = p.stream || new MediaStream();
-                  if (!s.getTracks().some((t) => t.id === event.track.id)) {
-                    s.addTrack(event.track);
-                  }
-                  return { ...p, stream: s };
-                }
-                return p;
-              })
-            );
-          }
-        );
+        const pc = getOrCreatePeerConnection(participant.id);
 
-        peerConnectionsRef.current[participant.id] = pc;
-
-        // Create and send offer
         try {
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
@@ -295,47 +372,23 @@ export default function App() {
     // When another user joins after us
     socket.on('user-joined', (newUser: Participant) => {
       setRemoteParticipants((prev) => {
-        if (prev.some((p) => p.id === newUser.id)) return prev;
+        if (prev.some((p) => p.id === newUser.id)) {
+          return prev.map((p) => (p.id === newUser.id ? { ...p, ...newUser } : p));
+        }
         return [...prev, { ...newUser, stream: new MediaStream() }];
       });
+      // Prepare peer connection ready for negotiation
+      getOrCreatePeerConnection(newUser.id);
     });
 
     // WebRTC Signaling Relay
     socket.on('signal', async ({ caller, signalData, type }: { caller: string; signalData: any; type: string }) => {
-      let pc = peerConnectionsRef.current[caller];
-
-      if (!pc) {
-        pc = createPeerConnection(
-          caller,
-          localStreamRef.current,
-          (candidate) => {
-            socket.emit('signal', {
-              target: caller,
-              signalData: candidate,
-              type: 'candidate'
-            });
-          },
-          (event) => {
-            setRemoteParticipants((prev) =>
-              prev.map((p) => {
-                if (p.id === caller) {
-                  const s = p.stream || new MediaStream();
-                  if (!s.getTracks().some((t) => t.id === event.track.id)) {
-                    s.addTrack(event.track);
-                  }
-                  return { ...p, stream: s };
-                }
-                return p;
-              })
-            );
-          }
-        );
-        peerConnectionsRef.current[caller] = pc;
-      }
+      const pc = getOrCreatePeerConnection(caller);
 
       if (type === 'offer') {
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(signalData));
+          await drainPendingIceCandidates(caller, pc);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           socket.emit('signal', {
@@ -349,13 +402,21 @@ export default function App() {
       } else if (type === 'answer') {
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(signalData));
+          await drainPendingIceCandidates(caller, pc);
         } catch (err) {
           console.error('Error handling WebRTC answer:', err);
         }
       } else if (type === 'candidate') {
         try {
           if (signalData) {
-            await pc.addIceCandidate(new RTCIceCandidate(signalData));
+            if (!pc.remoteDescription || !pc.remoteDescription.type) {
+              if (!pendingIceCandidatesRef.current[caller]) {
+                pendingIceCandidatesRef.current[caller] = [];
+              }
+              pendingIceCandidatesRef.current[caller].push(signalData);
+            } else {
+              await pc.addIceCandidate(new RTCIceCandidate(signalData));
+            }
           }
         } catch (err) {
           console.error('Error handling ICE candidate:', err);
@@ -509,8 +570,16 @@ export default function App() {
   };
 
   // Start class directly from Admin Panel
-  const handleStartClassFromAdmin = async (classData: { roomId: string; title: string; instructorName: string }) => {
+  const handleStartClassFromAdmin = async (classData: {
+    roomId: string;
+    title: string;
+    instructorName: string;
+    passcode?: string;
+  }) => {
     setIsAdminPanelOpen(false);
+    if (classData.passcode) {
+      setRoomPasscode(classData.passcode);
+    }
     let stream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -528,7 +597,8 @@ export default function App() {
       role: 'admin',
       isAudioMuted: false,
       isVideoMuted: false,
-      localStream: stream
+      localStream: stream,
+      passcode: classData.passcode
     });
   };
 
@@ -882,6 +952,7 @@ export default function App() {
       <HeaderBar
         roomTitle={roomTitle}
         roomId={roomId}
+        passcode={roomPasscode}
         role={userRole}
         participantCount={1 + remoteParticipants.length}
         isMeetingRecording={isMeetingRecording}
