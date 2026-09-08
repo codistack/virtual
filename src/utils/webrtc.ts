@@ -92,6 +92,19 @@ export async function replaceVideoTrack(
     const pc = peerConnections[socketId];
     if (!pc || pc.signalingState === 'closed') continue;
 
+    // Prefer replacing track on the negotiated video transceiver directly
+    const transceiver = pc.getTransceivers().find(
+      (t) => t.receiver.track.kind === 'video'
+    );
+    if (transceiver && transceiver.sender) {
+      try {
+        await transceiver.sender.replaceTrack(newTrack);
+        continue;
+      } catch (e) {
+        console.warn('Error replacing video track on transceiver:', e);
+      }
+    }
+
     const senders = pc.getSenders();
     const videoSender = senders.find(
       (s) => s.track && s.track.kind === 'video'
@@ -101,7 +114,7 @@ export async function replaceVideoTrack(
       try {
         await videoSender.replaceTrack(newTrack);
       } catch (e) {
-        console.warn('Error replacing video track:', e);
+        console.warn('Error replacing video track on sender:', e);
       }
     } else if (newTrack && fallbackStream) {
       try {
@@ -125,6 +138,19 @@ export async function replaceAudioTrack(
     const pc = peerConnections[socketId];
     if (!pc || pc.signalingState === 'closed') continue;
 
+    // Prefer replacing track on the negotiated audio transceiver directly
+    const transceiver = pc.getTransceivers().find(
+      (t) => t.receiver.track.kind === 'audio'
+    );
+    if (transceiver && transceiver.sender) {
+      try {
+        await transceiver.sender.replaceTrack(newTrack);
+        continue;
+      } catch (e) {
+        console.warn('Error replacing audio track on transceiver:', e);
+      }
+    }
+
     const senders = pc.getSenders();
     const audioSender = senders.find(
       (s) => s.track && s.track.kind === 'audio'
@@ -134,7 +160,7 @@ export async function replaceAudioTrack(
       try {
         await audioSender.replaceTrack(newTrack);
       } catch (e) {
-        console.warn('Error replacing audio track:', e);
+        console.warn('Error replacing audio track on sender:', e);
       }
     } else if (newTrack && fallbackStream) {
       try {

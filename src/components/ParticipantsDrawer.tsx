@@ -25,6 +25,7 @@ interface ParticipantsDrawerProps {
   participants: Participant[];
   roomId: string;
   roomTitle: string;
+  passcode?: string;
   onAdminControlMedia: (
     targetSocketId: string,
     mediaType: 'audio' | 'video',
@@ -44,6 +45,7 @@ export const ParticipantsDrawer: React.FC<ParticipantsDrawerProps> = ({
   participants,
   roomId,
   roomTitle,
+  passcode,
   onAdminControlMedia,
   onAdminMuteAll
 }) => {
@@ -73,18 +75,27 @@ export const ParticipantsDrawer: React.FC<ParticipantsDrawerProps> = ({
 
   const studentsCount = allList.filter((p) => p.role === 'student').length;
 
+  const buildInviteLink = () => {
+    let link = `${window.location.origin}/?room=${encodeURIComponent(roomId)}`;
+    if (passcode) {
+      link += `&passcode=${encodeURIComponent(passcode)}`;
+    }
+    return link;
+  };
+
   const handleShareWhatsApp = () => {
-    const link = `${window.location.origin}/?room=${encodeURIComponent(roomId)}`;
+    const link = buildInviteLink();
     const msg =
       `📚 *Enlace para unirse a la clase virtual*\n\n` +
       `📌 *Clase:* ${roomTitle}\n` +
-      `🆔 *ID de Sala:* *${roomId}*\n\n` +
-      `🔗 *Entra ahora aquí:* \n${link}`;
+      `🆔 *ID de Sala:* *${roomId}*\n` +
+      (passcode ? `🔑 *Código de acceso:* *${passcode}*\n\n` : `\n`) +
+      `🔗 *Entra ahora directamente aquí:* \n${link}`;
     window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, '_blank');
   };
 
   const handleCopyLink = async () => {
-    const link = `${window.location.origin}/?room=${encodeURIComponent(roomId)}`;
+    const link = buildInviteLink();
     await navigator.clipboard.writeText(link);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);

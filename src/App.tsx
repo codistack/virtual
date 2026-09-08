@@ -34,7 +34,14 @@ export default function App() {
   const [isInMeeting, setIsInMeeting] = useState<boolean>(false);
   const [roomId, setRoomId] = useState<string>('');
   const [roomTitle, setRoomTitle] = useState<string>('');
-  const [roomPasscode, setRoomPasscode] = useState<string>('');
+  const [roomPasscode, setRoomPasscode] = useState<string>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return (params.get('passcode') || '').trim();
+    } catch {
+      return '';
+    }
+  });
   const [userName, setUserName] = useState<string>('');
   const [userRole, setUserRole] = useState<UserRole>('student');
   const [socketId, setSocketId] = useState<string>('');
@@ -83,21 +90,37 @@ export default function App() {
   const recorderRef = useRef<MeetingRecorder>(new MeetingRecorder());
   const meetingTimerIntervalRef = useRef<any>(null);
 
-  // Check URL params for room invitation & passcode
-  const [initialRoomFromUrl, setInitialRoomFromUrl] = useState<string>('');
-  const [initialPasscodeFromUrl, setInitialPasscodeFromUrl] = useState<string>('');
+  // Check URL params for room invitation & passcode immediately on initial load
+  const [initialRoomFromUrl, setInitialRoomFromUrl] = useState<string>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return (params.get('room') || '').toUpperCase();
+    } catch {
+      return '';
+    }
+  });
+  const [initialPasscodeFromUrl, setInitialPasscodeFromUrl] = useState<string>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return (params.get('passcode') || '').trim();
+    } catch {
+      return '';
+    }
+  });
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const roomParam = params.get('room');
-    const passcodeParam = params.get('passcode');
-    if (roomParam) {
-      setInitialRoomFromUrl(roomParam.toUpperCase());
-    }
-    if (passcodeParam) {
-      setInitialPasscodeFromUrl(passcodeParam.trim());
-      setRoomPasscode(passcodeParam.trim());
-    }
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const roomParam = params.get('room');
+      const passcodeParam = params.get('passcode');
+      if (roomParam && roomParam.toUpperCase() !== initialRoomFromUrl) {
+        setInitialRoomFromUrl(roomParam.toUpperCase());
+      }
+      if (passcodeParam && passcodeParam.trim() !== initialPasscodeFromUrl) {
+        setInitialPasscodeFromUrl(passcodeParam.trim());
+        setRoomPasscode(passcodeParam.trim());
+      }
+    } catch {}
   }, []);
 
   // Sync ref with local stream & update all active peer connections
@@ -105,29 +128,11 @@ export default function App() {
     localStreamRef.current = localStream;
     if (!localStream) return;
 
-    // Attach or replace tracks on all active peer connections
-    Object.keys(peerConnectionsRef.current).forEach((targetId) => {
-      const pc = peerConnectionsRef.current[targetId];
-      if (!pc || pc.signalingState === 'closed') return;
+    const videoTrack = localStream.getVideoTracks()[0] || null;
+    const audioTrack = localStream.getAudioTracks()[0] || null;
 
-      localStream.getTracks().forEach((track) => {
-        const senders = pc.getSenders();
-        const existingSender = senders.find(
-          (s) => (s.track && s.track.kind === track.kind) || s.kind === track.kind
-        );
-        if (existingSender) {
-          existingSender.replaceTrack(track).catch((err) => {
-            console.warn('Could not replace track on peer connection:', err);
-          });
-        } else {
-          try {
-            pc.addTrack(track, localStream);
-          } catch (err) {
-            console.warn('Could not add track to existing peer connection:', err);
-          }
-        }
-      });
-    });
+    replaceVideoTrack(peerConnectionsRef.current, videoTrack, localStream);
+    replaceAudioTrack(peerConnectionsRef.current, audioTrack, localStream);
   }, [localStream]);
 
   // Clean up WebRTC peer connections
@@ -281,6 +286,10 @@ export default function App() {
           setRemoteParticipants((prev) =>
             prev.map((p) => {
               if (p.id === targetId) {
+                const incomingStream = (event.streams && event.streams[0]) ? event.streams[0] : null;
+                if (incomingStream) {
+                  return { ...p, stream: incomingStream };
+                }
                 const existingTracks = p.stream
                   ? p.stream.getTracks().filter((t) => t.id !== event.track.id && t.kind !== event.track.kind)
                   : [];
@@ -994,6 +1003,7 @@ export default function App() {
           participants={remoteParticipants}
           roomId={roomId}
           roomTitle={roomTitle}
+          passcode={roomPasscode}
           onAdminControlMedia={handleAdminControlMedia}
           onAdminMuteAll={handleAdminMuteAll}
         />

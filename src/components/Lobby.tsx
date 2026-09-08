@@ -54,6 +54,17 @@ export const Lobby: React.FC<LobbyProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [roomError, setRoomError] = useState<string | null>(null);
 
+  // Sync props when initialRoomId or initialPasscode changes/arrives
+  useEffect(() => {
+    if (initialRoomId) {
+      setRoomId(initialRoomId);
+      setActiveTab('join');
+    }
+    if (initialPasscode) {
+      setStudentPasscode(initialPasscode);
+    }
+  }, [initialRoomId, initialPasscode]);
+
   // Sync name with account if logged in
   useEffect(() => {
     if (currentUserAccount?.name && !name) {
@@ -487,6 +498,22 @@ export const Lobby: React.FC<LobbyProps> = ({
               )}
             </div>
 
+            {/* Direct Invitation Banner */}
+            {initialRoomId && (
+              <div className="mb-4 p-3.5 bg-emerald-950/50 border border-emerald-500/40 rounded-2xl flex items-center gap-3 animate-in fade-in">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center flex-shrink-0">
+                  <GraduationCap className="w-5 h-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-emerald-300">Invitación a Clase Virtual</p>
+                  <p className="text-[11px] text-slate-300 truncate">
+                    Sala: <span className="font-mono font-bold text-white">{roomId || initialRoomId}</span>
+                    {studentPasscode && <span className="ml-2 text-emerald-400">✓ Código verificado</span>}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Tab Navigation */}
             <div
               id="lobby-tabs"
@@ -623,7 +650,9 @@ export const Lobby: React.FC<LobbyProps> = ({
                   ) : (
                     <>
                       <span>
-                        {activeTab === 'create'
+                        {initialRoomId
+                          ? `Entrar a la clase ahora (${roomId || initialRoomId})`
+                          : activeTab === 'create'
                           ? 'Crear e Iniciar Clase (Admin)'
                           : 'Entrar a la clase'}
                       </span>
