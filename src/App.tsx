@@ -142,36 +142,56 @@ export default function App() {
     setIsAudioMuted(config.isAudioMuted);
     setIsVideoMuted(config.isVideoMuted);
 
-    let activeStream = config.localStream;
-    if (!activeStream) {
-      try {
-        activeStream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true
-        });
-      } catch (err) {
-        console.warn('Unable to get media devices on join:', err);
-      }
-    }
+    // Enter meeting room immediately without blocking
+    setIsInMeeting(true);
 
+    const activeStream = config.localStream;
     setLocalStream(activeStream);
     localStreamRef.current = activeStream;
 
-    // Connect to Socket.IO signaling server
-    const socket = io(window.location.origin, {
-      transports: ['websocket', 'polling']
+    // Asynchronously try to get media stream if not available from lobby
+    if (!activeStream && navigator.mediaDevices?.getUserMedia) {
+      navigator.mediaDevices
+        .getUserMedia({ video: true, audio: true })
+        .then((stream) => {
+          setLocalStream(stream);
+          localStreamRef.current = stream;
+        })
+        .catch((err) => {
+          console.warn('Unable to get media devices on join:', err);
+        });
+    }
+
+    // Connect to Socket.IO signaling server (polling first for instant connection, then upgrade)
+    const socket = io({
+      transports: ['polling', 'websocket'],
+      reconnection: true,
+      reconnectionAttempts: 15,
+      reconnectionDelay: 1000,
+      timeout: 10000
     });
     socketRef.current = socket;
 
-    socket.on('connect', () => {
+    const emitJoin = () => {
       setSocketId(socket.id || '');
       socket.emit('join-room', {
         roomId: config.roomId,
+        title: config.roomTitle,
         name: config.name,
         role: config.role,
         isMuted: config.isAudioMuted,
         isVideoOff: config.isVideoMuted
       });
+    };
+
+    if (socket.connected) {
+      emitJoin();
+    } else {
+      socket.on('connect', emitJoin);
+    }
+
+    socket.on('connect_error', (err) => {
+      console.warn('Socket connection error (retrying):', err);
     });
 
     // Room joined callback from server
@@ -181,9 +201,10 @@ export default function App() {
       participants: Participant[];
       messages: ChatMessage[];
     }) => {
-      setIsInMeeting(true);
-      setRoomTitle(data.room.title);
-      setIsMeetingRecording(data.room.isRecording);
+      if (data.room?.title) {
+        setRoomTitle(data.room.title);
+      }
+      setIsMeetingRecording(!!data.room?.isRecording);
       setChatMessages(data.messages || []);
 
       // Existing participants in the room

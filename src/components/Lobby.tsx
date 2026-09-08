@@ -9,7 +9,8 @@ import {
   Users,
   Sparkles,
   ArrowRight,
-  Monitor
+  Monitor,
+  Loader2
 } from 'lucide-react';
 import { UserRole } from '../types';
 
@@ -31,6 +32,8 @@ export const Lobby: React.FC<LobbyProps> = ({ initialRoomId = '', onJoin }) => {
   const [name, setName] = useState('');
   const [roomTitle, setRoomTitle] = useState('');
   const [roomId, setRoomId] = useState(initialRoomId);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [roomError, setRoomError] = useState<string | null>(null);
 
   // Audio / Video device states in lobby
   const [isAudioMuted, setIsAudioMuted] = useState(false);
@@ -139,12 +142,17 @@ export const Lobby: React.FC<LobbyProps> = ({ initialRoomId = '', onJoin }) => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const finalName = name.trim() || (activeTab === 'create' ? 'Profesor' : 'Estudiante');
+    if (isSubmitting) return;
+
+    const finalName = name.trim() || (activeTab === 'create' ? 'Prof. Administrador' : 'Estudiante');
 
     if (activeTab === 'create') {
       const generatedRoomId =
         'SALA-' + Math.random().toString(36).substring(2, 6).toUpperCase();
       const finalTitle = roomTitle.trim() || `Clase Virtual de ${finalName}`;
+
+      setIsSubmitting(true);
+      setRoomError(null);
 
       onJoin({
         roomId: generatedRoomId,
@@ -157,7 +165,13 @@ export const Lobby: React.FC<LobbyProps> = ({ initialRoomId = '', onJoin }) => {
       });
     } else {
       const targetRoom = roomId.trim().toUpperCase();
-      if (!targetRoom) return;
+      if (!targetRoom) {
+        setRoomError('Por favor ingresa el código o ID de la sala.');
+        return;
+      }
+
+      setIsSubmitting(true);
+      setRoomError(null);
 
       onJoin({
         roomId: targetRoom,
@@ -333,10 +347,9 @@ export const Lobby: React.FC<LobbyProps> = ({ initialRoomId = '', onJoin }) => {
                 <input
                   id="input-user-name"
                   type="text"
-                  required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder={activeTab === 'create' ? 'Ej. Prof. Carlos Mendoza' : 'Ej. María Gómez'}
+                  placeholder={activeTab === 'create' ? 'Ej. Prof. Carlos Mendoza (o deja en blanco)' : 'Ej. María Gómez'}
                   className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:border-blue-500 transition"
                 />
               </div>
@@ -366,15 +379,23 @@ export const Lobby: React.FC<LobbyProps> = ({ initialRoomId = '', onJoin }) => {
                   <input
                     id="input-room-id"
                     type="text"
-                    required
                     value={roomId}
-                    onChange={(e) => setRoomId(e.target.value.toUpperCase())}
+                    onChange={(e) => {
+                      setRoomId(e.target.value.toUpperCase());
+                      setRoomError(null);
+                    }}
                     placeholder="Ej. SALA-9B2F"
-                    className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-500 text-sm font-mono tracking-wide focus:outline-none focus:border-blue-500 transition"
+                    className={`w-full px-4 py-3 bg-slate-950 border rounded-xl text-slate-100 placeholder-slate-500 text-sm font-mono tracking-wide focus:outline-none transition ${
+                      roomError ? 'border-red-500 focus:border-red-500' : 'border-slate-800 focus:border-blue-500'
+                    }`}
                   />
-                  <p className="text-[11px] text-slate-400 mt-1.5">
-                    Pega el código de sala proporcionado por tu profesor o anfitrión.
-                  </p>
+                  {roomError ? (
+                    <p className="text-[11px] text-red-400 mt-1.5 font-medium">{roomError}</p>
+                  ) : (
+                    <p className="text-[11px] text-slate-400 mt-1.5">
+                      Pega el código de sala proporcionado por tu profesor o anfitrión.
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -382,13 +403,28 @@ export const Lobby: React.FC<LobbyProps> = ({ initialRoomId = '', onJoin }) => {
                 <button
                   id="btn-submit-lobby"
                   type="submit"
-                  disabled={!name.trim() || (activeTab === 'join' && !roomId.trim())}
-                  className="w-full py-3.5 px-6 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm shadow-xl shadow-blue-600/30 flex items-center justify-center gap-2 transition cursor-pointer"
+                  disabled={isSubmitting}
+                  className="w-full py-3.5 px-6 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold text-sm shadow-xl shadow-blue-600/30 flex items-center justify-center gap-2 transition cursor-pointer"
                 >
-                  <span>
-                    {activeTab === 'create' ? 'Iniciar clase como Administrador' : 'Entrar a la clase'}
-                  </span>
-                  <ArrowRight className="w-4 h-4" />
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>
+                        {activeTab === 'create'
+                          ? 'Creando e iniciando clase...'
+                          : 'Entrando a la clase...'}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span>
+                        {activeTab === 'create'
+                          ? 'Crear e Iniciar Clase (Admin)'
+                          : 'Entrar a la clase'}
+                      </span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
                 </button>
               </div>
             </form>

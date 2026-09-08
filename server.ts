@@ -92,8 +92,9 @@ io.on('connection', (socket) => {
   let currentRoomId: string | null = null;
   let currentUser: RoomParticipant | null = null;
 
-  socket.on('join-room', ({ roomId, name, role, isMuted, isVideoOff }: {
+  socket.on('join-room', ({ roomId, title, name, role, isMuted, isVideoOff }: {
     roomId: string;
+    title?: string;
     name: string;
     role: 'admin' | 'student';
     isMuted?: boolean;
@@ -106,7 +107,7 @@ io.on('connection', (socket) => {
     if (!room) {
       room = {
         id: normalizedRoomId,
-        title: role === 'admin' ? `Clase de ${name || 'Profesor'}` : `Clase Virtual (${normalizedRoomId})`,
+        title: title?.trim() || (role === 'admin' ? `Clase de ${name || 'Profesor'}` : `Clase Virtual (${normalizedRoomId})`),
         adminSocketId: role === 'admin' ? socket.id : '',
         createdAt: Date.now(),
         isRecording: false,
@@ -114,6 +115,8 @@ io.on('connection', (socket) => {
         messages: []
       };
       rooms.set(normalizedRoomId, room);
+    } else if (title?.trim() && role === 'admin') {
+      room.title = title.trim();
     }
 
     if (role === 'admin' && !room.adminSocketId) {
